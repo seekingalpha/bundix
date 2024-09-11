@@ -40,11 +40,9 @@ class Bundix
     cache = parse_gemset
     lock = parse_lockfile
     dep_cache = build_depcache(lock)
-
-    # reverse so git comes last
-    lock.specs.reverse_each.with_object({}) do |spec, gems|
-      gem = find_cached_spec(spec, cache) || convert_spec(spec, cache, dep_cache)
-      gems.merge!(gem)
+    target_platform = Gem::Platform.new(ENV.fetch("BUNDIX_TARGET_PLATFORM", "current"))
+    Bundler::SpecSet.new(lock.specs).for(lock.dependencies.values, false, [target_platform]).each.with_object({}) do |spec, gems|
+      gems[spec.name] = find_cached_spec(spec, cache) || convert_spec(spec, dep_cache)
 
       if spec.dependencies.any?
         gems[spec.name]['dependencies'] = spec.dependencies.map(&:name) - ['bundler']
@@ -86,37 +84,37 @@ class Bundix
     {platforms: platforms}
   end
 
-  def convert_spec(spec, cache, dep_cache)
+  def convert_spec(spec, dep_cache)
     {
-      spec.name => {
-        version: spec.version.to_s,
-        source: Source.new(spec, fetcher).convert
-      }.merge(platforms(spec, dep_cache)).merge(groups(spec, dep_cache))
-    }
+      version: spec.version.to_s,
+      source: Source.new(spec, fetcher).convert,
+      platform: spec.platform.to_s,
+    }.merge(platforms(spec, dep_cache)).merge(groups(spec, dep_cache))
   rescue => ex
     warn "Skipping #{spec.name}: #{ex}"
     puts ex.backtrace
-    {spec.name => {}}
+    {}
   end
 
   def find_cached_spec(spec, cache)
-    name, cached = cache.find{|k, v|
-      next unless k == spec.name
-      next unless cached_source = v['source']
+    cached = cache[spec.name]
+    return unless cached
+    return unless cached['platform'] == spec.platform.to_s
+    return unless cached_source = cached['source']
 
-      case spec_source = spec.source
-      when Bundler::Source::Git
-        next unless cached_source['type'] == 'git'
-        next unless cached_rev = cached_source['rev']
-        next unless spec_rev = spec_source.options['revision']
-        spec_rev == cached_rev
-      when Bundler::Source::Rubygems
-        next unless cached_source['type'] == 'gem'
-        v['version'] == spec.version.to_s
-      end
-    }
-
-    {name => cached} if cached
+    case spec_source = spec.source
+    when Bundler::Source::Git
+      return unless cached_source['type'] == 'git'
+      return unless cached_rev = cached_source['rev']
+      return unless spec_rev = spec_source.options['revision']
+      return unless spec_rev == cached_rev
+      cached
+    when Bundler::Source::Rubygems
+      return unless cached_source['type'] == 'gem'
+      return unless cached['version'] == spec.version.to_s
+      return unless (spec_source.options['remotes'] & cached_source['remotes']).any?
+      cached
+    end
   end
 
   def build_depcache(lock)
