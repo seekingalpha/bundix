@@ -13,5 +13,5 @@ Gem::Specification.new do |s|
                   Dir['template/**/*.{rb,nix,erb}']
   s.bindir      = 'bin'
   s.executables = ['bundix']
-  s.add_runtime_dependency 'bundler', '>= 1.11'
+  s.add_runtime_dependency 'bundler', '>= 2.4'
 end
