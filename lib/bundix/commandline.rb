@@ -16,6 +16,7 @@ class Bundix
       lockfile: 'Gemfile.lock',
       gemset: 'gemset.nix',
       target_platform: 'current',
+      all_target_platforms: false,
       project: File.basename(Dir.pwd)
     }
 
@@ -70,6 +71,10 @@ class Bundix
 
         o.on '-t', "--target-platform=#{options[:target_platform]}", 'the Rubygems platform to bundle for' do |value|
           options[:target_platform] = value
+        end
+
+        o.on '-a', "--all-target-platforms", 'define attribute set with gemsets for all Rubygems platforms' do
+          options[:all_target_platforms] = true
         end
 
         o.on '-d', '--dependencies', 'include gem dependencies (deprecated)' do

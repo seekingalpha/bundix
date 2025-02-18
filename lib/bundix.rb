@@ -40,14 +40,38 @@ class Bundix
     cache = parse_gemset
     lock = parse_lockfile
     dep_cache = build_depcache(lock)
-    target_platform = Gem::Platform.new(options[:target_platform])
-    spec_set_for(lock, [target_platform]).each.with_object({}) do |spec, gems|
-      gems[spec.name] = find_cached_spec(spec, cache) || convert_spec(spec, dep_cache)
+    if options[:all_target_platforms]
+      target_platforms = lock.platforms
+    else
+      target_platforms = [Gem::Platform.new(options[:target_platform])]
+    end
+    gemset = spec_set_for(lock, target_platforms).each.with_object(empty_gemset) do |spec, gems|
+      if spec.platform == "ruby"
+        matching_platforms = ["ruby"]
+      else
+        matching_platforms = target_platforms.select { |p| spec.platform === p }
+      end
+      gem = find_cached_spec(spec, cache, matching_platforms) || convert_spec(spec, dep_cache)
 
       if spec.dependencies.any?
-        gems[spec.name]['dependencies'] = spec.dependencies.map(&:name) - ['bundler']
+        gem['dependencies'] = spec.dependencies.map(&:name) - ['bundler']
+      end
+
+      if options[:all_target_platforms]
+        matching_platforms.each do |platform|
+          gems[platform.to_s][spec.name] = gem
+        end
+      else
+        gems[spec.name] = gem
       end
     end
+    if options[:all_target_platforms] && gemset.key?("ruby")
+      (gemset.keys - ["ruby"]).each do |platform_name|
+        gemset[platform_name] = gemset["ruby"].merge(gemset[platform_name])
+      end
+      gemset.delete("ruby") unless target_platforms.include?("ruby")
+    end
+    gemset
   end
 
   def groups(spec, dep_cache)
@@ -96,10 +120,18 @@ class Bundix
     {}
   end
 
-  def find_cached_spec(spec, cache)
-    cached = cache[spec.name]
+  def find_cached_spec(spec, cache, matching_platforms)
+    cached = nil
+    if options[:all_target_platforms]
+      matching_platforms.each do |platform|
+        cached = cache[platform.to_s][spec.name]
+        break if cached
+      end
+    else
+      cached = cache[spec.name]
+    end
     return unless cached
-    return unless cached['platform'] == spec.platform.to_s
+    return unless spec.platform === Gem::Platform.new(cached['platform'])
     return unless cached_source = cached['source']
 
     case spec_source = spec.source
@@ -158,13 +190,31 @@ class Bundix
     return dep_cache
   end
 
+  def empty_gemset
+    if options[:all_target_platforms]
+      Hash.new { |h, k| h[k] = {} }
+    else
+      {}
+    end
+  end
+
   def parse_gemset
     path = File.expand_path(options[:gemset])
-    return {} unless File.file?(path)
+    return empty_gemset unless File.file?(path)
     json = Bundix.sh(NIX_INSTANTIATE, '--eval', '-E', %(
       builtins.toJSON (import #{Nixer.serialize(path)}))
     )
-    JSON.parse(json.strip.gsub(/\\"/, '"')[1..-2])
+    cache = empty_gemset.merge(JSON.parse(json.strip.gsub(/\\"/, '"')[1..-2]))
+    if options[:all_target_platforms] && !cache.key?("ruby")
+      cache.values.each do |platform_cache|
+        platform_cache.each do |name, spec|
+          next if cache["ruby"][name]
+
+          cache["ruby"][name] = spec if spec["platform"] == "ruby"
+        end
+      end
+    end
+    cache
   end
 
   def parse_lockfile
